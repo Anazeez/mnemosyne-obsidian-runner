@@ -6,8 +6,14 @@ import "dotenv/config";
 const VAULT_ROOT = process.env.VAULT_ROOT;
 const ARIADNE_PASSKEY = process.env.ARIADNE_PASSKEY;
 
+const WORKER_BASE =
+  "https://mnemosyne-worker.izeesub.workers.dev";
+
+const MODE = process.argv[2] || "intake";
 const ENDPOINT =
-  "https://mnemosyne-worker.izeesub.workers.dev/api/ariadne/core/intake";
+  MODE === "review"
+    ? `${WORKER_BASE}/api/ariadne/core/review`
+    : `${WORKER_BASE}/api/ariadne/core/intake`;
 
 if (!VAULT_ROOT) throw new Error("Missing VAULT_ROOT in .env");
 if (!ARIADNE_PASSKEY) throw new Error("Missing ARIADNE_PASSKEY in .env");
@@ -25,9 +31,9 @@ function mdList(items = []) {
 }
 
 function makeReviewMarkdown(originalPath, response) {
-  const proposal = response.proposal ?? {};
+  const proposal = response.proposal ?? response.review ?? {};
 
-  return `# Ariadne Review Proposal
+  return `# Ariadne ${MODE === "review" ? "Review" : "Intake"} Proposal
 
 ## Original file path
 
@@ -75,15 +81,26 @@ async function main() {
     const filePath = path.join(inboxDir, entry.name);
     const content = await fs.readFile(filePath, "utf8");
 
-    const payload = {
-      title: stripMd(entry.name),
-      content,
-      source: "obsidian",
-      metadata: {
-        vaultPath: `Inbox/${entry.name}`
-      },
-      reviewFirst: true
-    };
+    const payload =
+      MODE === "review"
+        ? {
+            title: stripMd(entry.name),
+            content,
+            currentLocation: `Inbox/${entry.name}`,
+            metadata: {
+              vaultPath: `Inbox/${entry.name}`
+            },
+            reviewFirst: true
+          }
+        : {
+            title: stripMd(entry.name),
+            content,
+            source: "obsidian",
+            metadata: {
+              vaultPath: `Inbox/${entry.name}`
+            },
+            reviewFirst: true
+          };
 
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -107,7 +124,8 @@ async function main() {
       continue;
     }
 
-    const reviewPath = path.join(reviewDir, `review-${entry.name}`);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const reviewPath = path.join(reviewDir, `${MODE}-${stamp}-${entry.name}`);
     const reviewMarkdown = makeReviewMarkdown(`Inbox/${entry.name}`, data);
 
     await fs.writeFile(reviewPath, reviewMarkdown, "utf8");
