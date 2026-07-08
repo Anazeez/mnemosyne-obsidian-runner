@@ -1,0 +1,24 @@
+{
+  "name": "mnemosyne-obsidian-runner",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anazeez/mnemosyne-obsidian-runner.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/Anazeez/mnemosyne-obsidian-runner/issues"
+  },
+  "homepage": "https://github.com/Anazeez/mnemosyne-obsidian-runner#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}
