@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "job_id", "changed_files", "summary"],
+  "properties": {
+    "status": { "const": "completed" },
+    "job_id": { "type": "string", "pattern": "^ariadne-[0-9a-f]{24}$" },
+    "changed_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}
