@@ -19,7 +19,7 @@
     "url": "https://github.com/Anazeez/mnemosyne-obsidian-runner/issues"
   },
   "homepage": "https://github.com/Anazeez/mnemosyne-obsidian-runner#readme",
-  "dependencies": {
-    "dotenv": "^17.4.2"
+  "engines": {
+    "node": ">=20.12"
   }
 }
