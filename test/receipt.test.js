@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { formatReceipt, writeReceipt } from "../src/receipt.js";
+import { formatReceipt, readReceipt, writeReceipt } from "../src/receipt.js";
 
 function result(status = "succeeded") {
   return {
@@ -50,8 +50,19 @@ test("persists receipts atomically and treats only identical content as idempote
   const second = await writeReceipt(reportsDir, result());
   assert.equal(second.duplicate, true);
   assert.equal(await readFile(first.path, "utf8"), formatReceipt(result()));
+  const recovered = await readReceipt(reportsDir, result().job.id);
+  assert.equal(recovered.result.status, "succeeded");
+  assert.equal(recovered.result.job.id, result().job.id);
   await assert.rejects(
     () => writeReceipt(reportsDir, { ...result("failed"), summary: "different" }),
     (error) => error.code === "receipt_conflict"
   );
+});
+
+test("receipt details do not copy approved source or review bodies", () => {
+  const markdown = formatReceipt({
+    ...result(),
+    job: { ...result().job, capture: { content: "private source body" }, reviewMarkdown: "private review body" }
+  });
+  assert.doesNotMatch(markdown, /private source body|private review body/);
 });

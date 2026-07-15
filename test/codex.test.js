@@ -96,3 +96,20 @@ test("terminates the process group on timeout", async () => {
   await assert.rejects(() => runCodex(job, options), (error) => error.code === "codex_timeout");
   assert.equal(child.killedWith, "SIGTERM");
 });
+
+test("escalates to SIGKILL when a timed-out child ignores termination", async () => {
+  const signals = [];
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdin = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    child.kill = (signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") child.emit("close", null, signal);
+    };
+    return child;
+  };
+  const options = await config(spawnFn, 5);
+  options.killGraceMs = 5;
+  await assert.rejects(() => runCodex(job, options), (error) => error.code === "codex_timeout");
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});

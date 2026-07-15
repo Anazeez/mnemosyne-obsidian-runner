@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { claimJob, completeClaim } from "../src/claim.js";
+import { claimJob, completeClaim, renewClaim, withClaimOwnership } from "../src/claim.js";
 
 const job = { id: "ariadne-7a1e0e9c31c419e95b05b003" };
 
@@ -72,4 +72,64 @@ test("completion is durable before the claim is removed", async () => {
     { runnerId: "other", leaseMs: 60_000 }
   );
   assert.equal(repeated.status, "completed");
+});
+
+test("an expired runner cannot complete or remove its replacement claim", async () => {
+  const paths = await pathsForTest();
+  const stale = await claimJob(
+    paths,
+    job,
+    new Date("2026-07-14T12:00:00.000Z"),
+    { runnerId: "stale", leaseMs: 1_000 }
+  );
+  const replacement = await claimJob(
+    paths,
+    job,
+    new Date("2026-07-14T12:00:02.000Z"),
+    { runnerId: "replacement", leaseMs: 60_000 }
+  );
+  assert.equal(replacement.status, "claimed");
+  await assert.rejects(
+    () => completeClaim(paths, stale.claim, { status: "succeeded" }),
+    (error) => error.code === "claim_lost"
+  );
+  const busy = await claimJob(
+    paths,
+    job,
+    new Date("2026-07-14T12:00:03.000Z"),
+    { runnerId: "third", leaseMs: 60_000 }
+  );
+  assert.equal(busy.status, "busy");
+  assert.equal(busy.claim.runnerId, "replacement");
+});
+
+test("lease renewal prevents recovery and ownership gates publication", async () => {
+  const paths = await pathsForTest();
+  const first = await claimJob(
+    paths, job, new Date("2026-07-14T12:00:00.000Z"),
+    { runnerId: "first", leaseMs: 1_000 }
+  );
+  await renewClaim(
+    paths, first.claim, new Date("2026-07-14T12:00:00.500Z"), 10_000,
+    { memorySnapshotHash: "snapshot-a" }
+  );
+  const second = await claimJob(
+    paths, job, new Date("2026-07-14T12:00:02.000Z"),
+    { runnerId: "second", leaseMs: 1_000 }
+  );
+  assert.equal(second.status, "busy");
+  assert.equal(second.claim.memorySnapshotHash, "snapshot-a");
+  assert.equal(await withClaimOwnership(paths, first.claim, () => "published"), "published");
+});
+
+test("recovers an abandoned short-lived ownership lock", async () => {
+  const paths = await pathsForTest();
+  const lockPath = path.join(paths.claimsDir, ".locks", `${job.id}.lock`);
+  await mkdir(lockPath, { recursive: true });
+  await utimes(lockPath, new Date(0), new Date(0));
+  const result = await claimJob(
+    paths, job, new Date("2026-07-14T12:00:00.000Z"),
+    { runnerId: "recovery", leaseMs: 60_000 }
+  );
+  assert.equal(result.status, "claimed");
 });

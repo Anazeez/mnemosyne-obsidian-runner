@@ -59,13 +59,20 @@ An expired claim may be reclaimed by a later invocation. Inspect the matching
 claim, completion, and receipt before manual recovery; never delete a claim while
 another runner could still be active.
 
+Before reading the queue, the runner recovers any durable Memory publication
+journal. A transaction without terminal receipt/completion evidence is rolled
+back to its recorded pre-run digest; one with terminal evidence is rolled forward
+to its validated post-run digest. Do not manually remove `Runtime/Transactions`.
+
 Do not run the legacy `ariadne-intake-review.js` process concurrently. It uses a
 different intake loop and is not part of the approval-bound action workflow.
 
 ## Safety boundary
 
-Codex is launched without a shell using `--sandbox workspace-write`, with
-`Memory/` as its working directory, an ephemeral session, and a strict structured
-output schema. No additional writable directory is supplied. The runner rejects
+Codex is launched without a shell using `--sandbox workspace-write`, with a
+disposable staged copy of `Memory/` as its working directory, an ephemeral
+session, and a strict structured output schema. No live-vault or additional
+writable directory is supplied. Only a validated staged result is published to
+the synchronized Memory tree through a fsynced recovery journal. The runner rejects
 symlinks, deletions, paths outside Memory, unexpected files, malformed
 frontmatter, hash mismatches, and duplicate index or log entries before indexing.

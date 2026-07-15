@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { RunnerError } from "./contracts.js";
+import { RunnerError, sha256 } from "./contracts.js";
 
 function redactString(value) {
   return value
@@ -25,7 +25,16 @@ function yaml(value) {
 }
 
 export function formatReceipt(result) {
-  const safe = redact(result);
+  const safe = redact({
+    ...result,
+    job: {
+      id: result.job.id,
+      sourcePath: result.job.sourcePath,
+      sourceHash: result.job.sourceHash,
+      reviewArtifact: result.job.reviewArtifact,
+      reviewHash: result.job.reviewHash
+    }
+  });
   return `---
 schema: ariadne.receipt/v1
 job_id: ${yaml(safe.job.id)}
@@ -49,6 +58,27 @@ ${safe.summary}
 ${JSON.stringify(safe, null, 2)}
 \`\`\`
 `;
+}
+
+export async function readReceipt(reportsDir, jobId) {
+  const receiptPath = path.join(reportsDir, `receipt-${jobId}.md`);
+  let markdown;
+  try {
+    markdown = await readFile(receiptPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  const match = markdown.match(/## Details\s+```json\n([\s\S]+?)\n```/);
+  if (!match) throw new RunnerError("receipt", "receipt_invalid", "Existing receipt has no valid detail block.", false);
+  let result;
+  try { result = JSON.parse(match[1]); } catch {
+    throw new RunnerError("receipt", "receipt_invalid", "Existing receipt details are invalid JSON.", false);
+  }
+  if (result?.job?.id !== jobId || !["succeeded", "partial_success", "failed"].includes(result?.status)) {
+    throw new RunnerError("receipt", "receipt_invalid", "Existing receipt does not match the job.", false);
+  }
+  return { path: receiptPath, result };
 }
 
 export async function writeReceipt(reportsDir, result) {
@@ -78,4 +108,31 @@ export async function writeReceipt(reportsDir, result) {
     try { await unlink(temporaryPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
   }
   return { path: receiptPath, duplicate: false };
+}
+
+export async function writeInvalidWorkOrderReport(reportsDir, filename, markdown) {
+  await mkdir(reportsDir, { recursive: true });
+  const identity = sha256(markdown).slice(0, 16);
+  const reportPath = path.join(reportsDir, `invalid-work-order-${identity}.md`);
+  const content = `---
+schema: ariadne.invalid-work-order/v1
+status: failed
+code: invalid_work_order
+queue_file: ${JSON.stringify(filename)}
+content_hash: ${sha256(markdown)}
+---
+# Invalid Ariadne work order
+
+The queue entry failed strict contract validation. Its content is not copied into
+this diagnostic. Correct or remove it only after preserving evidence.
+`;
+  try {
+    await writeFile(reportPath, content, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    if (await readFile(reportPath, "utf8") !== content) {
+      throw new RunnerError("receipt", "receipt_conflict", "Invalid-work-order diagnostic conflicts with existing content.", false);
+    }
+  }
+  return reportPath;
 }

@@ -1,5 +1,13 @@
 import { constants } from "node:fs";
-import { copyFile, lstat, readdir, readFile, realpath } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath
+} from "node:fs/promises";
 import path from "node:path";
 
 import { RunnerError, canonicalText, sha256 } from "./contracts.js";
@@ -54,6 +62,40 @@ export async function snapshotTree(rootPath) {
   await walk(root);
   found.sort(([left], [right]) => left.localeCompare(right));
   return new Map(found);
+}
+
+export function treeDigest(tree) {
+  return sha256(JSON.stringify([...tree].map(([file, snapshot]) => [file, snapshot.sha256, snapshot.size])));
+}
+
+async function ensureChildDirectory(root, relativeDirectory) {
+  let current = root;
+  for (const part of relativeDirectory.split("/").filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      const stat = await lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        invalid("write_outside_memory", `Memory directory is unsafe: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      await mkdir(current);
+    }
+    const resolved = await realpath(current);
+    if (!inside(root, resolved)) invalid("write_outside_memory", `Memory directory escapes its root: ${current}`);
+  }
+}
+
+export async function createStagedMemory(memoryRoot, temporaryRoot, jobId) {
+  const liveRoot = await realpath(memoryRoot);
+  await mkdir(temporaryRoot, { recursive: true });
+  const stagedRoot = await mkdtemp(path.join(temporaryRoot, `ariadne-${jobId}-`));
+  const before = await snapshotTree(liveRoot);
+  for (const [relativePath, snapshot] of before) {
+    await ensureChildDirectory(stagedRoot, path.posix.dirname(relativePath));
+    await copyFile(snapshot.realPath, path.join(stagedRoot, ...relativePath.split("/")), constants.COPYFILE_EXCL);
+  }
+  return { root: stagedRoot, before, digest: treeDigest(before) };
 }
 
 export function diffTrees(before, after) {
@@ -135,13 +177,16 @@ export async function validateMemoryDiff(job, diff, memoryRoot) {
   if (parsed.values.schema !== "ariadne.memory/v1" || parsed.values.status !== "canon") {
     invalid("invalid_memory_schema", "Knowledge page must be canon with schema ariadne.memory/v1.");
   }
+  if (parsed.values.sources !== job.sourcePath) {
+    invalid("invalid_memory_schema", "Knowledge page provenance does not match the approved source.");
+  }
   if (!/^[0-9a-f]{64}$/.test(parsed.values.sha256) || sha256(parsed.body.trim()) !== parsed.values.sha256) {
     invalid("invalid_memory_schema", "Knowledge page sha256 does not match its body.");
   }
 
-  const manifest = await safeRead(memoryRoot, sourceManifestPath);
-  if (!manifest.includes("schema: ariadne.source/v1") || !manifest.includes(`source_hash: ${job.sourceHash}`) ||
-      !manifest.includes(`source_path: ${job.sourcePath}`)) {
+  const manifest = parseFrontmatter(await safeRead(memoryRoot, sourceManifestPath)).values;
+  if (manifest.schema !== "ariadne.source/v1" || manifest.source_hash !== job.sourceHash ||
+      manifest.source_path !== job.sourcePath) {
     invalid("invalid_memory_schema", "Source manifest does not match the approved source.");
   }
 

@@ -99,10 +99,6 @@ export async function runCodex(job, config) {
     "--output-last-message", outputPath,
     "-"
   ];
-  if (args.includes("--add-dir") || args.includes("danger-full-access")) {
-    throw codexError("codex_execution_failed", "Unsafe Codex arguments were rejected.");
-  }
-
   const spawnFn = config.spawnFn ?? spawn;
   const child = spawnFn(config.codexBin ?? "codex", args, {
     cwd: memoryRoot,
@@ -112,17 +108,22 @@ export async function runCodex(job, config) {
     stdio: ["pipe", "pipe", "pipe"]
   });
   let stderr = "";
+  child.stdout?.on("data", () => {});
   child.stderr?.on("data", (chunk) => { stderr += String(chunk).slice(0, 4096); });
 
   await new Promise((resolve, reject) => {
     let finished = false;
     let timedOut = false;
+    let killTimer;
     const timer = setTimeout(() => {
       if (finished) return;
       timedOut = true;
+      killTimer = setTimeout(
+        () => terminate(child, "SIGKILL"),
+        config.killGraceMs ?? 1_000
+      );
+      killTimer.unref?.();
       terminate(child, "SIGTERM");
-      finished = true;
-      reject(codexError("codex_timeout", `Codex timed out after ${config.timeoutMs} ms.`, true));
     }, config.timeoutMs);
 
     child.once("error", (error) => {
@@ -132,7 +133,15 @@ export async function runCodex(job, config) {
       reject(codexError("codex_execution_failed", `Codex could not start: ${error.message}`, true));
     });
     child.once("close", (code, signal) => {
-      if (finished || timedOut) return;
+      if (timedOut) {
+        clearTimeout(killTimer);
+        if (!finished) {
+          finished = true;
+          reject(codexError("codex_timeout", `Codex timed out after ${config.timeoutMs} ms.`, true));
+        }
+        return;
+      }
+      if (finished) return;
       finished = true;
       clearTimeout(timer);
       if (code === 0) resolve();

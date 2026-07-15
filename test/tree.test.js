@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { diffTrees, installMemoryRules, snapshotTree, validateMemoryDiff } from "../src/tree.js";
+import {
+  createStagedMemory,
+  diffTrees,
+  installMemoryRules,
+  snapshotTree,
+  validateMemoryDiff
+} from "../src/tree.js";
 import { sha256 } from "../src/contracts.js";
 
 async function root() {
@@ -109,6 +115,19 @@ test("installs durable Memory rules once and never overwrites them", async () =>
   assert.equal(await readFile(path.join(memory, "AGENTS.md"), "utf8"), "approved rules");
 });
 
+test("runs changes in a disposable staging copy without touching live Memory", async () => {
+  const memory = await root();
+  const temporary = await root();
+  await write(memory, "index.md", "before");
+  const staged = await createStagedMemory(memory, temporary, job.id);
+  await write(staged.root, "index.md", "after");
+  await write(staged.root, "Knowledge/new.md", "new page");
+  assert.equal(await readFile(path.join(memory, "index.md"), "utf8"), "before");
+
+  assert.equal(await readFile(path.join(staged.root, "index.md"), "utf8"), "after");
+  assert.equal(await readFile(path.join(staged.root, "Knowledge/new.md"), "utf8"), "new page");
+});
+
 test("rejects a knowledge body whose hash does not match frontmatter", async () => {
   const memory = await root();
   const knowledge = `Knowledge/deep-work--${job.sourceHash.slice(0, 12)}.md`;
@@ -121,5 +140,20 @@ test("rejects a knowledge body whose hash does not match frontmatter", async () 
   await assert.rejects(
     () => validateMemoryDiff(job, { created: [...after.keys()], modified: [], deleted: [] }, memory),
     /sha256/i
+  );
+});
+
+test("rejects knowledge provenance that differs from the approved source", async () => {
+  const memory = await root();
+  const knowledge = `Knowledge/deep-work--${job.sourceHash.slice(0, 12)}.md`;
+  const source = `Sources/${job.sourceHash}.md`;
+  await write(memory, knowledge, page("# Deep Work\n").replace(`sources: ${job.sourcePath}`, "sources: Other.md"));
+  await write(memory, source, `---\nschema: ariadne.source/v1\nsource_hash: ${job.sourceHash}\nsource_path: ${job.sourcePath}\n---\n`);
+  await write(memory, "index.md", `[[${knowledge.slice(0, -3)}]]`);
+  await write(memory, "log.md", job.id);
+  const after = await snapshotTree(memory);
+  await assert.rejects(
+    () => validateMemoryDiff(job, { created: [...after.keys()], modified: [], deleted: [] }, memory),
+    /provenance|source/i
   );
 });
