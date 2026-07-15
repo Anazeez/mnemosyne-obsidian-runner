@@ -1,10 +1,10 @@
 {
   "name": "mnemosyne-obsidian-runner",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Review-first Ariadne runner with exact contextual rehydration",
+  "main": "ariadne-intake-review.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",
